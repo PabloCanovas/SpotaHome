@@ -1,0 +1,569 @@
+---
+title: "Spot A Home - Technical Test"
+author: "Pablo Cánovas Tourné"
+date: "8/2/2022"
+output: 
+  html_document:
+    toc: true
+    theme: united  
+    highlight: pygment
+---
+
+```{r setup, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width = 8, fig.height = 5)
+```
+
+## Libraries
+```{r, message=FALSE}
+library(knitr)
+library(RSQLite)
+library(tidyverse)
+library(ggthemes)
+```
+
+## Importing data
+```{r}
+con <- dbConnect(SQLite(), dbname = "Data scientist exercise.db")
+table_name <- dbListTables(con)
+```
+
+```{r}
+print(table_name)
+df <- RSQLite::dbGetQuery(conn = con, statement = "SELECT * FROM access_log") %>% 
+  as_tibble()
+```
+
+## Exploratory Data Analysis
+
+This is how our data look
+```{r}
+df %>% head() %>% kable()
+```
+
+Let's change the data types. This will help us later when plotting the data. Avoiding character data when unnecessary also help us with the performance of the code (not really a thing in this test but it may be considered a good practice).
+```{r}
+df <- df %>% 
+  mutate(datetime = lubridate::ymd_hms(datetime),          # Parsing date
+         user_id = as.numeric(user_id)) %>%
+  mutate(across(where(is_character), ~ as.factor(.x)))   # characters to categorical
+
+df %>% map(class)
+```
+
+
+How many null values have we got by column?
+
+```{r}
+df %>% map_int(~ .x %>% is.na() %>% sum())
+```
+
+Let's do some basic counting to have a grasp about our data.
+
+```{r}
+df %>% count(variant) %>% kable(format = "html", table.attr = "style='width:20%;'")
+
+df %>% count(city) %>% kable(format = "html", table.attr = "style='width:20%;'")
+
+df %>% count(event_type) %>% kable(format = "html", table.attr = "style='width:20%;'")
+```
+
+Let's calculate some percentages too. It's always useful to have a sense of how the business is working across different countries. We show below the share of each city for the three events we are monitoring (bookings, favorite addings, and views)
+```{r}
+df %>% 
+  group_by(event_type) %>% 
+  mutate(n_type = n()) %>% 
+  group_by(event_type, city) %>% 
+  mutate(n_city = n(),
+         ratio = n_city/n_type) %>% 
+  ggplot() + 
+  geom_col(aes(event_type, ratio, fill = city), position = "dodge") + 
+  theme_minimal() + 
+  scale_fill_tableau() + 
+  scale_y_continuous(labels = scales::percent) + 
+  labs(title = "Ratio of records by city and event_type") +
+  theme(title = element_text(size = 14))
+```
+
+It seems that the business is much more active in Madrid and Rome.
+
+The full counting table:
+```{r}
+df %>% count(variant, city, event_type) %>% kable()
+```
+
+Maybe that's too much info for a table. Let's plot it.
+
+```{r}
+df %>% 
+  count(variant, event_type) %>% 
+  ggplot() + 
+  geom_col(aes(variant, n, fill = event_type), alpha = .8, position = "dodge") + 
+  theme_minimal() + 
+  scale_fill_tableau() + 
+  labs(title = "Count of records by event_type") +
+  theme(title = element_text(size = 14))
+```
+
+
+Data looks natural so far: the number of booking requests is smaller than the number of marked as favorite, which is smaller than the number of views too.
+
+What about displaying this information for each pair variant-city?
+
+```{r}
+df %>% 
+  count(variant, city, event_type) %>% 
+  ggplot() + 
+  geom_col(aes(variant, n, fill = event_type), alpha = .8, position = "dodge") + 
+  facet_wrap(~ city, ncol = 1) + 
+  theme_minimal() + 
+  scale_fill_tableau() + 
+  labs(title = "Count of records by event_type") +
+  theme(title = element_text(size = 14),
+        strip.background = element_rect(fill = "grey"))
+```
+
+Seems right, but the number of booking in London is so small that we can't even see some bars. Making the y-axis independent in each subplot gives us:
+
+
+```{r}
+df %>% 
+  count(variant, city, event_type) %>% 
+  ggplot() + 
+  geom_col(aes(variant, n, fill = event_type), alpha = .8, position = "dodge") + 
+  facet_wrap(~ city, ncol = 1, scales = "free") + 
+  theme_minimal() + 
+  scale_fill_tableau() + 
+  labs(title = "Count of records by event_type") +
+  theme(title = element_text(size = 14),
+        strip.background = element_rect(fill = "grey"))
+```
+
+And we easily see that, for now, the data behaves as expected.
+
+
+Let's plot some more quick ideas.
+
+```{r}
+bookings <- df %>% 
+  filter(event_type == "booking_request") %>% 
+  mutate(date = lubridate::floor_date(datetime, "day"))
+```
+
+How many bookings have we got per day?
+
+```{r}
+bookings %>% 
+  count(date, variant) %>% 
+  ggplot(aes(date, n, col = variant, group = variant)) + 
+  geom_line() + 
+  geom_point() + 
+  theme_minimal() + 
+  scale_color_tableau() + 
+  scale_y_continuous(breaks=seq(0,12,2)) +
+  labs(title = "Daily bookings by variant") + 
+  theme(title = element_text(size = 14))
+```
+
+What about studying each city on its own?
+
+```{r}
+bookings %>% 
+  count(date, city) %>% 
+  ggplot(aes(date, n, col = city, group = city)) + 
+  geom_line() + 
+  geom_point() + 
+  theme_minimal() + 
+  scale_color_tableau(direction = -1) + 
+  scale_y_continuous(breaks=seq(0,12,2)) +
+  labs(title = "Daily bookings by city") + 
+  theme(title = element_text(size = 14))
+```
+
+What does the revenue data look like for each variant?
+
+```{r}
+bookings %>% 
+  ggplot(aes(variant, revenue, col = variant)) + 
+  geom_boxplot() + 
+  theme_minimal() +
+  scale_color_tableau() +
+  labs(title = "Revenue distribution by variant") + 
+  theme(title = element_text(size = 14))
+```
+
+We've got a warning suggesting something is happening with 16 records. Maybe they are missing.
+
+
+# Check the 3 assumptions made for our experiment
+
+We got the indication that the following statements should be true by design in our experiment:
+
+* A user may be assigned to only one variant. There should be no events for the same user associated to different variants.  
+
+* A booking request always has a revenue greater than zero.  
+
+* A user can perform only one booking request.  
+
+
+### Assumption 1
+
+Let's find out if one user is assigned to both variants. 
+
+```{r}
+both_variants_users <- df %>% 
+  select(user_id, variant) %>% 
+  distinct() %>% 
+  count(user_id, sort = T) %>% 
+  filter(n > 1)
+
+both_variants_users %>% head() %>% kable(format = "html", table.attr = "style='width:20%;'")
+```
+
+
+```{r}
+both_variants_records <- df %>% 
+  filter(user_id %in% both_variants_users$user_id) %>% 
+  count(variant, event_type)
+
+both_variants_records %>% head() %>% kable(format = "html", table.attr = "style='width:30%;'")
+```
+
+38 users appear in both variants, and the impact of this error propagates across the whole table, for a total of `r sum(both_variants_records$n)` records.
+
+The problem with this data is that it shouldn't be there according to the design of the experiment, so simply doing nothing doesn't feel right. The results and the learnings we get from the A/B test could be flawed.
+
+The simplest solution would be to simply drop those records as they represent less than 5% of the total number of records.
+
+Another reasoning could be to keep the records from the first variant they saw and discard the ones after the first event corresponding to the second variant, assuming  they were using the platform with version 'A' (for instance) for several days before being showed the second one.
+This way you could maximize the amount of data you are using in your test without fears of it being biased.
+
+However, a quick glance to the data from these users show us that the variants got completely mixed up and we can not apply this approach:
+
+```{r}
+df %>% filter(user_id == 103751531) %>% arrange(datetime) %>% head() %>% kable()
+df %>% filter(user_id == 563390156) %>% arrange(datetime) %>% head() %>% kable()
+```
+
+
+I would suggest to talk to the product owner and teammates to let them now about this problem. It could be the signal of a bigger problem under the hood. For the sake of this analysis, I am discarding all data from those users as it could lead to a biased analysis.
+
+So the first assumption is not met. Let's check out the second one.
+
+
+### Assumption 2
+
+* A booking request always has a revenue greater than zero.
+
+From the boxplot plot, we can already see that there is at least one 0 revenue record for each variant. Due to the scale, the plot could be misleading, so let's check it out directly in our table.
+
+```{r}
+zero_revenue_data <- bookings %>% 
+  filter(revenue == 0) 
+
+zero_revenue_data %>% 
+  count(variant) %>% 
+  kable(format = "html", table.attr = "style='width:20%;'")
+```
+
+Indeed we have 22 booking records without revenue. That's odd. Nobody wants to work for free, right?
+
+Besides that, we can easily see that there are also some records with a missing value in the revenue field. 
+
+```{r}
+revenue_data <- bookings %>% 
+  mutate(null_revenue = if_else(is.na(revenue), TRUE, FALSE))
+
+null_revenue_data <- revenue_data %>% 
+  filter(null_revenue == TRUE)
+
+revenue_data %>% 
+  count(variant, null_revenue) %>% 
+  ggplot() + 
+  geom_col(aes(variant, n, fill = null_revenue), alpha = .8, position = "dodge") + 
+  theme_minimal() + 
+  scale_fill_tableau() + 
+  labs(title = "Number of missing values in revenue field by variant") +
+  theme(title = element_text(size = 14))
+```
+
+How many records lack the revenue information?
+```{r}
+bookings %>% 
+  mutate(null_revenue = if_else(is.na(revenue), TRUE, FALSE)) %>% 
+  filter(null_revenue == TRUE) %>% 
+  count(variant, city) %>% 
+  kable()
+```
+
+We've got 16 missing records across both variants, in Madrid and Rome, but not in London. This does not necessarily mean anything given we already noticed the small traffic and bookings in London. 
+
+So, recapping, we have records with zero revenue and also missing values. What is the different between the both cases? In my experience, this kind of situation is not a random mistake and both, nulls and zeros, have a different meaning. 
+
+For instance, the records with revenue marked as null could be due to the user canceling the booking in the last minute, and the zeros could be due to the renter canceling in the last minute and Spot a Home having to rearrange a place for some days for the user without any cost. Maybe the probability of the user to cancel the deal is related to the variant and if so we could think of take that into account for the analysis, but it seems to be a little of a stretch for this exercise.
+
+Another 'solution' could be to impute all these values to the mean of each group. I bet you could find someone doing that in some random Medium article. But that wouldn't make any sense given the same reason stated above: probably zeros and nulls have different meaning.
+
+Imputing the nulls as zeros also doesn't feel right. That data is probably not OK and will bias our results. 
+
+I would talk to my teammates to try to find an explanation for this situation but, unless we are certain about the integrity of the data, I would suggest to just get rid of it.
+
+All in all, the second statement is violated too.
+
+### Assumption 3
+
+* A user can perform only one booking request.
+
+```{r}
+more_than_one_bookings_users <- bookings %>% 
+  count(user_id) %>% 
+  filter(n > 1)
+
+more_than_one_bookings_users %>% head() %>% kable(format = "html", table.attr = "style='width:20%;'")
+```
+```{r}
+bookings %>% 
+  filter(user_id == 859812222) %>% 
+  kable()
+```
+
+
+This user has performed the same day two booking requests for Rome. Again, assumption 3 is also violated.
+
+Solution: Given it's only one user and two records, simply dropping this data should be just fine as it will rarely affect the results of our test.
+
+I dislike that I 'solved' the three cases with "just get rid of that data", but it wasn't that much data after all. The core idea is to preserve the integrity of the data to ensure an unbiased experiment.
+
+
+# Question 1
+
+**What is the uplift or downlift in the treatment group, if there’s any? Is it statistically significant at 95% or 99% level? Indicate the kind of test performed and p-value.**
+
+
+```{r}
+legit_data <- df %>%                # We will use only the data we think is correct
+  filter(!(user_id %in% both_variants_users$user_id)) %>% 
+  filter(!(user_id %in% more_than_one_bookings_users$user_id)) %>% 
+  anti_join(zero_revenue_data, by = "user_id") %>% 
+  anti_join(null_revenue_data, by = "user_id") 
+
+total_users_count <- legit_data %>%              # Samples sizes per variant
+  select(user_id, variant) %>% 
+  distinct() %>% 
+  count(variant) %>% 
+  rename(total = n)
+
+total_bookings_count <- legit_data %>%           # Number of converted sales per variant
+  filter(event_type == "booking_request") %>% 
+  select(user_id, variant) %>% 
+  count(variant) %>% 
+  rename(converted = n)
+
+cvr_table <- full_join(total_users_count, 
+                       total_bookings_count, 
+                       by = "variant") %>% 
+  mutate(cvr = converted/total)
+
+kable(cvr_table)
+
+```
+
+The variant B have smaller conversion rate per user. 
+
+```{r}
+cvr_a <- cvr_table %>% filter(variant == "A") %>% pull(cvr)
+cvr_b <- cvr_table %>% filter(variant == "B") %>% pull(cvr)
+
+uplift <- (cvr_b - cvr_a) / cvr_a
+
+print(uplift)
+```
+
+We have a downlift of 26.89%. 
+
+
+Is it statistically significant?
+To answer this question we make use of a statistical test usually known as Z-test (technically is a t-test as we don't really know the population mean, only the sample mean) which, given both conversion rates and sample sizes give us the probability of finding a difference between conversion rates as extreme by pure chance, assuming there is actually no difference between both variants. That probability is the p-value. To know more about p-value and hypothesis testing you can also check [this article](https://typethepipe.com/post/ab-testing/). *Disclosure: I'm the author.*. 
+
+We will use a one-tailed test as we want to check the probability of variant B being better than variant A. 
+A one-sided hypothesis and a one-tailed test should be used when we would act a certain way, or draw certain conclusions, if we discover a statistically significant difference in a particular direction, but not in the other direction. 
+The use of two-tailed tests is ubiquitous and the misconceptions and misuses of these tests are widespread. As noted in the paper Hyun-Chul Cho Shuzo Abe (2013) “Is two-tailed testing for directional research hypotheses tests legitimate?” (Journal of Business Research 66:1261-1266), they found that “This paper demonstrates that there is currently a widespread misuse of two-tailed testing for directional research hypotheses tests.”
+
+I also developed an small [shiny app](https://pabloct.shinyapps.io/StatisticalSignificance/) that allow us to make this very same test and learn about statistical significance and statistical power. Check it out!
+
+```{r}
+prop.test(x = c(196, 144), n = c(799,803), alternative = "greater")
+```
+
+We only have left to compare the obtained p-value with the alpha we previously set. If p-value < alpha we will reject the null hypothesis, that is, we will claim our result as significant. 
+95% confidence means alpha = 0.05, and 99% confidence means alpha = 0.01.
+
+As p-value < 0.001, we can confidently say that our results are statistically significant at 99% level.
+
+
+# Question 2
+
+**Revenue per user: What is the uplift or downlift in the treatment group, if there’s any? Is it statistically significant at 95% or 99% level? Indicate the kind of test performed and p-value.**
+
+In this case it's not about comparing proportions anymore, but the means. Therefore have to perform a two sample t-test. 
+
+Obviously the revenues in B variant are individually superior to the ones from the A variant, but we are asked to compare the *revenue by website visitor*.
+
+We will simply calculate the parameters from the whole sample (booking and views) for both variants. We'll impute null revenue events with 0. Also, we have to deduplicate the table to only count the record which yields the maximum revenue for each user (to avoid having duplicated users).
+
+```{r}
+revenue_table <- legit_data %>% 
+  mutate(revenue = if_else(is.na(revenue), 0, revenue)) %>% 
+  group_by(user_id) %>% 
+  arrange(desc(revenue)) %>% 
+  slice_head(n = 1) %>%                   # We take the observation with the most revenue.
+  group_by(variant) %>% 
+  summarise(n = n(),
+            mean_revenue_per_user = mean(revenue),
+            sd_revenue_per_user = sd(revenue)) 
+
+kable(revenue_table)
+```
+
+We know this distribution with zero and non-zero revenues is not normal. However, due to the Central Limit Theorem, we know that the mean of the sample means from any distribution will converge to a normal distribution. Therefore we can use this approach of calculating the t-statistic and the p-value, and use them to prove or reject the null hypothesis.
+
+```{r}
+sample_mean_a <- revenue_table %>% filter(variant == "A") %>% pull(mean_revenue_per_user)
+sample_mean_b <- revenue_table %>% filter(variant == "B") %>% pull(mean_revenue_per_user)
+
+sd_a <- revenue_table %>% filter(variant == "A") %>% pull(sd_revenue_per_user)
+sd_b <- revenue_table %>% filter(variant == "B") %>% pull(sd_revenue_per_user)
+
+n_a <- revenue_table %>% filter(variant == "A") %>% pull(n)
+n_b <- revenue_table %>% filter(variant == "B") %>% pull(n)
+
+tscore <- (sample_mean_b - sample_mean_a) / sqrt(sd_a**2/n_a + sd_b**2/n_b)
+
+pvalue <- 1-pnorm(tscore)
+print(pvalue)
+```
+
+
+P-value is less than alpha = 0.01, which tell us the result is statistically significance with 99% confidence. Therefore, we reject the null hypothesis that states both mean revenues per user are the same. I.e, there is less than 1% chance that we had found a result at least as extreme as this one if both variants had actually the same average revenue by visitor. 
+
+Variant B is returning higher revenues consistently but, how much?
+
+```{r}
+uplift <- (sample_mean_b - sample_mean_a) / sample_mean_a
+
+print(uplift)
+```
+
+The revenue uplift is 29.2%
+
+
+# Question 3
+**What would be your recommendation to stakeholders regarding rolling out or rolling back the experiment?**
+
+If our objective were to maximize the revenue, my recommendation would be to roll out the new variant B regardless the smaller conversion rate as we are 99% confident that the average revenue per visitor of the page is higher than in the control one. The uplift is about 29% so the benefits are not negligible.
+
+
+# Question 4
+**The stakeholder forgot what was the % increase in fees applied in the treatment group. Try to plot a kernel density estimate of the revenue for each variant**
+
+```{r}
+legit_data %>% 
+  filter(event_type == "booking_request") %>% 
+  ggplot() + 
+  geom_density(aes(revenue, col = variant)) + 
+  theme_minimal() + 
+  scale_fill_tableau() + 
+  labs(title = "Revenue kernel density estimate by variant") +
+  theme(title = element_text(size = 14))
+```
+
+
+We can see how different are the revenue distribution for each variant, there is barely an overlap. In spite of the difference in averages, the shape of the curves is similar, resembling a gaussian distribution. 
+
+# Question 5
+**Determine the average revenue per booking request in each variant with a confidence interval of 95%. Choose an appropiate distribution as assumption**
+
+As said before, because of the Central Limit Theorem we know that the mean of the sample means tends towards a normal distribution (e.g, if we bootstrap several samples from the whole population, the distribution of the means of each sample will converge to a normal distribution). Therefore assuming normality seems legit here.
+
+The t-distribution converges to the normal when sample size increases, and our sample size is pretty decent. Therefore we are able to perform one sample t-test to find the average revenue with a confidence interval of 95%.
+
+```{r}
+revenue_a <- legit_data %>% 
+  filter(event_type == "booking_request") %>% 
+  filter(variant == "A") %>% 
+  pull(revenue)
+
+t.test(revenue_a)
+```
+
+
+```{r}
+revenue_b <- legit_data %>% 
+  filter(event_type == "booking_request") %>% 
+  filter(variant == "B") %>% 
+  pull(revenue)
+
+t.test(revenue_b)
+```
+
+We found that the variant A have 199.24 +- 3.48 average revenue per booking request. We are 95% confident that the true average for this variant falls in the interval [195.76, 202.72].
+
+We also found that the variant B have 352.13 +- 5.33 average revenue per booking request. We are 95% confident that the true average for this variant falls in the interval [346.8, 357.45].
+
+
+# Question 6
+
+**Determine what was the percentage increase of the fees in treatment group. It is a reliable determination?**
+
+The percentage increase of the fees in treatment group should be
+```{r}
+revenue_increase <- (352.13 - 199.24) / 199.24
+
+print(revenue_increase)
+```
+
+or about 77%.
+
+And what about the reliability of the calculation? 
+That's a tricky one, as we can not directly use the confidence intervals calculated above.
+To answer about the certainty of this uplift, we have to make use of the Kohavi formula from the 2009 paper "Controlled experiments on the web: survey and practical guide".
+
+It goes as follows: ```CI = (rel_diff+1)*((1 +- Z*sqrt(CV_a^2+CV_b^2- Z^2*CV_a^2*CV_b^2)) / (1-Z*CV_a^2)) - 1 ```
+
+So for our case:
+```{r}
+sd_a = sd(revenue_a)
+sd_b = sd(revenue_b)
+
+sample_mean_a <- mean(revenue_a)
+sample_mean_b <- mean(revenue_b)
+
+CV_a <- sd_a/sample_mean_a
+CV_b <- sd_b/sample_mean_b
+
+rel_diff <- revenue_increase
+
+```
+
+```{r}
+
+Z <- 1.282     # for a 90% confidence interval in a one-sided test
+
+CI_lower_bound = (rel_diff+1)*((1-Z*sqrt(CV_a^2+CV_b^2- Z^2*CV_a^2*CV_b^2)) / (1-Z*CV_a^2)) - 1
+CI_upper_bound = (rel_diff+1)*((1+Z*sqrt(CV_a^2+CV_b^2- Z^2*CV_a^2*CV_b^2)) / (1-Z*CV_a^2)) - 1
+
+message("Our 90% confidence interval for the uplift is [", round(CI_lower_bound,2), ",", round(CI_upper_bound,2), "]")
+```
+
+```{r}
+Z <- 1.645     # for a 95% confidence interval in a one-sided test
+
+CI_lower_bound = (rel_diff+1)*((1-Z*sqrt(CV_a^2+CV_b^2- Z^2*CV_a^2*CV_b^2)) / (1-Z*CV_a^2)) - 1
+CI_upper_bound = (rel_diff+1)*((1+Z*sqrt(CV_a^2+CV_b^2- Z^2*CV_a^2*CV_b^2)) / (1-Z*CV_a^2)) - 1
+
+message("Our 95% confidence interval for the uplift is [", round(CI_lower_bound,2), ",", round(CI_upper_bound,2), "]")
+```
+
+So, after all, we are not that confident in our result. The reason for this is the high variance in our revenues and a sample size below 350 bookings. Increasing the sample size would lead to a narrower confidence interval.
+
+**THAT'S ALL FOLKS!**
+

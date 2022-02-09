@@ -1,0 +1,9 @@
+
+# Installing the following packages is required to run Technical_Exercise.md
+
+install.packages("tidyverse")
+install.packages("RSQLite")
+install.packages('rmarkdown')
+install.packages('knitr')
+install.packages("ggthemes")
+install.packages("prettydoc")
