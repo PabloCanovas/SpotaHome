@@ -1,6 +1,6 @@
 # SpotaHome Technical Test
 
-* Executive summary can be found in Summary.txt
+* Executive summary can be found in Summary.md
 
 * I would suggest to start with a clean environment and install the packages found in Requirements.txt
 
